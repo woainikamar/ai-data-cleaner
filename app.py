@@ -229,16 +229,21 @@ if uploaded_file:
                 "目标列 (Target Columns)",
                 options=st.session_state.df_raw.columns.tolist()
             )
-            # BUG FIX: 明确将用户的选择保存到 session_state，供后续步骤使用
+            # BUG FIX 1: 明确将用户的选择保存到 session_state
             st.session_state.selected_cols = target_cols
 
-        # 提取唯一值逻辑
+        # 提取唯一值逻辑 - BUG FIX 2: 增强的去重与标准化逻辑
         if target_cols:
             unique_items = set()
             for col in target_cols:
-                # 简单清洗：转字符串，去首尾空格，排除空值
-                items = st.session_state.df_raw[col].dropna().astype(str).apply(lambda x: x.strip()).unique()
-                items = [t for t in items if t != '' and t.lower() != 'nan']
+                # 强制转为字符串并去空格，确保类型一致性
+                # 这样 '123' (str) 和 123 (int) 都会变成 '123'
+                series_str = st.session_state.df_raw[col].astype(str).str.strip()
+                
+                # 排除无效值 (nan, None, 空字符串)
+                mask = (series_str != '') & (series_str.str.lower() != 'nan') & (series_str.str.lower() != 'none')
+                items = series_str[mask].unique().tolist()
+                
                 unique_items.update(items)
 
             st.session_state.unique_values = list(unique_items)
@@ -308,12 +313,13 @@ if st.session_state.optimized_prompt and st.session_state.unique_values:
                 # 调用 AI
                 api_res = process_batch(client, batch, st.session_state.optimized_prompt)
 
-                # 解析结果
+                # 解析结果 - BUG FIX 3: 严格的 Key 匹配
                 if "results" in api_res:
                     for item in api_res["results"]:
-                        # 健壮性检查：确保 key 存在
-                        text_key = item.get("text")
-                        if text_key:
+                        raw_key = item.get("text")
+                        if raw_key is not None:
+                            # 关键：AI 返回的 Key 也要强制转字符串并 Strip，防止 AI 自动把数字转回 int
+                            text_key = str(raw_key).strip()
                             results_map[text_key] = {
                                 "code": item.get("code", "N/A"),
                                 "note": item.get("note", "")
@@ -332,11 +338,7 @@ if st.session_state.optimized_prompt and st.session_state.unique_values:
             code_map = {k: v['code'] for k, v in results_map.items()}
             note_map = {k: v['note'] for k, v in results_map.items()}
 
-            # BUG FIX: 严格使用用户明确选中的列 (st.session_state.selected_cols) 进行回填
-            # 而不是去猜测哪些列包含这些值
             cols_to_fill = st.session_state.get('selected_cols', [])
-            
-            # 过滤掉不存在的列（以防万一）
             valid_cols_to_fill = [c for c in cols_to_fill if c in df_result.columns]
 
             if not valid_cols_to_fill:
@@ -345,9 +347,13 @@ if st.session_state.optimized_prompt and st.session_state.unique_values:
             for col in valid_cols_to_fill:
                 # 插入位置：在该列的右侧
                 col_idx = df_result.columns.get_loc(col)
+                
+                # BUG FIX 4: 回填时的强类型匹配
+                # 必须先将列转为 str + strip，这样才能和 results_map 里的 key (str) 对应上
+                current_col_normalized = df_result[col].astype(str).str.strip()
 
-                mapped_notes = df_result[col].astype(str).str.strip().map(note_map).fillna("")
-                mapped_codes = df_result[col].astype(str).str.strip().map(code_map).fillna("")
+                mapped_notes = current_col_normalized.map(note_map).fillna("")
+                mapped_codes = current_col_normalized.map(code_map).fillna("")
                 
                 # 清理旧的结果列（如果重复运行）
                 if f"{col}_AI说明" in df_result.columns:
