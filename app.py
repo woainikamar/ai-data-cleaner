@@ -237,8 +237,8 @@ if uploaded_file:
             unique_items = set()
             for col in target_cols:
                 # 强制转为字符串并去空格，确保类型一致性
-                # 这样 '123' (str) 和 123 (int) 都会变成 '123'
-                series_str = st.session_state.df_raw[col].astype(str).str.strip()
+                # BUG FIX: 增加 rstrip(" ,，.。、") 以去除尾部常见标点，解决 "乙肝疫苗," 和 "乙肝疫苗" 不匹配问题
+                series_str = st.session_state.df_raw[col].astype(str).str.strip().str.rstrip(" ,，.。、")
                 
                 # 排除无效值 (nan, None, 空字符串)
                 mask = (series_str != '') & (series_str.str.lower() != 'nan') & (series_str.str.lower() != 'none')
@@ -348,9 +348,9 @@ if st.session_state.optimized_prompt and st.session_state.unique_values:
                 # 插入位置：在该列的右侧
                 col_idx = df_result.columns.get_loc(col)
                 
-                # BUG FIX 4: 回填时的强类型匹配
-                # 必须先将列转为 str + strip，这样才能和 results_map 里的 key (str) 对应上
-                current_col_normalized = df_result[col].astype(str).str.strip()
+                # BUG FIX 4: 回填时的强类型匹配 & 标点符号清洗
+                # 增加 rstrip(" ,，.。、")，确保回填时即使原始数据有逗号，也能匹配上 results_map 里没逗号的 Key
+                current_col_normalized = df_result[col].astype(str).str.strip().str.rstrip(" ,，.。、")
 
                 mapped_notes = current_col_normalized.map(note_map).fillna("")
                 mapped_codes = current_col_normalized.map(code_map).fillna("")
