@@ -87,6 +87,8 @@ if 'unique_values' not in st.session_state:
     st.session_state.unique_values = []
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
+if 'selected_cols' not in st.session_state:
+    st.session_state.selected_cols = []
 
 # ==========================================
 # 3. 侧边栏配置 (Sidebar)
@@ -227,6 +229,8 @@ if uploaded_file:
                 "目标列 (Target Columns)",
                 options=st.session_state.df_raw.columns.tolist()
             )
+            # BUG FIX: 明确将用户的选择保存到 session_state，供后续步骤使用
+            st.session_state.selected_cols = target_cols
 
         # 提取唯一值逻辑
         if target_cols:
@@ -328,28 +332,32 @@ if st.session_state.optimized_prompt and st.session_state.unique_values:
             code_map = {k: v['code'] for k, v in results_map.items()}
             note_map = {k: v['note'] for k, v in results_map.items()}
 
-            # 回填到 DataFrame
-            target_cols = [col for col in df_result.columns if df_result[col].isin(
-                results_map.keys()).any() or col in st.session_state.df_raw.columns]  # 简化逻辑，重新获取选中的列比较复杂，这里假设用户没改选
+            # BUG FIX: 严格使用用户明确选中的列 (st.session_state.selected_cols) 进行回填
+            # 而不是去猜测哪些列包含这些值
+            cols_to_fill = st.session_state.get('selected_cols', [])
+            
+            # 过滤掉不存在的列（以防万一）
+            valid_cols_to_fill = [c for c in cols_to_fill if c in df_result.columns]
 
-            # 这里我们需要重新获取用户步骤1选中的列，由于 Streamlit 刷新机制，
-            # 最好是在步骤1就存入 session_state。为简化，我们假设用户现在选的列就是刚才处理的列。
-            # 实际应用中可以锁定 session_state['selected_cols']
+            if not valid_cols_to_fill:
+                 st.warning("⚠️ 警告：似乎没有选中任何列进行回填，请检查第一步的选择。")
 
-            for col in df_result.columns:
-                # 检查该列是否有值在我们的 results_map 中
-                sample_values = df_result[col].astype(str).head(20).tolist()
-                is_target = any([v.strip() in results_map for v in sample_values])
+            for col in valid_cols_to_fill:
+                # 插入位置：在该列的右侧
+                col_idx = df_result.columns.get_loc(col)
 
-                if is_target:
-                    # 插入列
-                    col_idx = df_result.columns.get_loc(col)
+                mapped_notes = df_result[col].astype(str).str.strip().map(note_map).fillna("")
+                mapped_codes = df_result[col].astype(str).str.strip().map(code_map).fillna("")
+                
+                # 清理旧的结果列（如果重复运行）
+                if f"{col}_AI说明" in df_result.columns:
+                    del df_result[f"{col}_AI说明"]
+                if f"{col}_AI结果" in df_result.columns:
+                    del df_result[f"{col}_AI结果"]
 
-                    mapped_notes = df_result[col].astype(str).str.strip().map(note_map).fillna("")
-                    mapped_codes = df_result[col].astype(str).str.strip().map(code_map).fillna("")
-
-                    df_result.insert(col_idx + 1, f"{col}_AI说明", mapped_notes)
-                    df_result.insert(col_idx + 1, f"{col}_AI结果", mapped_codes)
+                # 插入新列
+                df_result.insert(col_idx + 1, f"{col}_AI说明", mapped_notes)
+                df_result.insert(col_idx + 1, f"{col}_AI结果", mapped_codes)
 
             st.session_state.df_result = df_result
             st.session_state.processing_complete = True
